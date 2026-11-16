@@ -1,0 +1,108 @@
+local BASE="https://bdouwcmwfbkzzknijucj.supabase.co/functions/v1"
+local AUTH_URL   = BASE.."/promers-auth"
+local LOAD_URL = BASE .. "/promers-load"
+local CLIENT_TAG="promers-v1"
+
+local HttpService=game:GetService("HttpService")
+local Players=game:GetService("Players")
+
+local placeId  = tostring(game.PlaceId)
+local username="Unknown"
+pcall(function() username=Players.LocalPlayer.Name end)
+
+local hwid = "Unknown"
+pcall(function()
+    hwid = game:GetService("RbxAnalyticsService"):GetClientId()
+end)
+
+if type(hwid)~="string" or #hwid<8 then
+    warn("[PROMERS] HWID tidak terbaca.")
+    return
+end
+
+local function getRequestFn()
+    return request
+        or (syn and syn.request)
+          or (http and http.request)
+        or http_request
+end
+
+local function doPost(url,payload)
+    local fn = getRequestFn()
+    if not fn then
+        warn("[PROMERS] Executor tidak support request()")
+        return nil
+    end
+
+    local ok, resp = pcall(fn, {
+        Url = url,
+        Method = "POST",
+        Headers = {
+            ["Content-Type"]  = "application/json",
+            ["X-Promers-Tag"] = CLIENT_TAG,
+            ["User-Agent"]    = "Roblox/WinInet",
+        },
+        Body=HttpService:JSONEncode(payload),
+    })
+
+    if not ok or not resp then
+        warn("[PROMERS] Request error.")
+        return nil
+    end
+    return resp
+end
+
+local authResp = doPost(AUTH_URL, {
+    place_id = placeId,
+    username=username,
+    hwid     = hwid,
+    ts = tostring(os.time()),
+})
+
+if not authResp or authResp.StatusCode~=200 then
+    warn("[PROMERS] Auth gagal. Status: "..tostring(authResp and authResp.StatusCode))
+    return
+end
+
+local authData
+local okDecode=pcall(function()
+    authData=HttpService:JSONDecode(authResp.Body)
+end)
+
+if not okDecode or not authData or not authData.token then
+    warn("[PROMERS] "..(authResp.Body or "Auth invalid"))
+    return
+end
+
+local token=authData.token
+
+task.wait(0.15)
+
+local loadResp = doPost(LOAD_URL, {
+    token=token,
+    hwid     = hwid,
+    place_id = placeId,
+    ts       = tostring(os.time()),
+})
+
+if not loadResp or loadResp.StatusCode ~= 200 then
+    warn("[PROMERS] Load gagal. Status: "..tostring(loadResp and loadResp.StatusCode))
+    return
+end
+
+local src=loadResp.Body
+if type(src)~="string" or #src<100 then
+    warn("[PROMERS] Payload tidak valid.")
+    return
+end
+
+local fn, err=loadstring(src)
+if not fn then
+    warn("[PROMERS] Compile error: " .. tostring(err))
+    return
+end
+
+local okRun, errRun = pcall(fn)
+if not okRun then
+    warn("[PROMERS] Runtime error: " .. tostring(errRun))
+end
